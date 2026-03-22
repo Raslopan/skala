@@ -8,14 +8,14 @@ import {
   type ReactNode,
 } from "react";
 
-export type UserRole = "guest" | "owner" | "admin";
+export type UserRole = "guest" | "user" | "admin";
 
 export interface User {
   id: string;
   email: string;
   name: string;
   role: UserRole;
-  createdAt: Date;
+  avatar?: string;
 }
 
 interface AuthContextType {
@@ -23,112 +23,72 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  register: (email: string, password: string, name: string, role: UserRole) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  isAdmin: boolean;
   isOwner: boolean;
   isGuest: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock user database
-const mockUsers: (User & { password: string })[] = [
-  {
-    id: "1",
-    email: "owner@example.com",
-    password: "owner123",
-    name: "John Owner",
-    role: "owner",
-    createdAt: new Date(2024, 0, 1),
-  },
-  {
-    id: "2",
-    email: "guest@example.com",
-    password: "guest123",
-    name: "Jane Guest",
-    role: "guest",
-    createdAt: new Date(2024, 0, 15),
-  },
-];
-
-const AUTH_STORAGE_KEY = "stayhub_auth";
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load user from localStorage on mount
+  // Check session on mount
   useEffect(() => {
-    const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        // Restore the createdAt as a Date object
-        parsed.createdAt = new Date(parsed.createdAt);
-        setUser(parsed);
-      } catch {
-        localStorage.removeItem(AUTH_STORAGE_KEY);
-      }
-    }
-    setIsLoading(false);
+    checkSession();
   }, []);
+
+  const checkSession = async () => {
+    try {
+      const response = await fetch("/api/auth/session");
+      const data = await response.json();
+      if (data.user) {
+        setUser(data.user);
+      }
+    } catch (error) {
+      console.error("Session check error:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const login = async (
     email: string,
     password: string
   ): Promise<{ success: boolean; error?: string }> => {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+      });
 
-    const foundUser = mockUsers.find(
-      (u) => u.email === email && u.password === password
-    );
+      const data = await response.json();
 
-    if (!foundUser) {
-      return { success: false, error: "Invalid email or password" };
+      if (!response.ok) {
+        return { success: false, error: data.error || "Login failed" };
+      }
+
+      setUser(data.user);
+      return { success: true };
+    } catch (error) {
+      console.error("Login error:", error);
+      return { success: false, error: "An error occurred during login" };
     }
-
-    const { password: _, ...userWithoutPassword } = foundUser;
-    setUser(userWithoutPassword);
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userWithoutPassword));
-    return { success: true };
   };
 
-  const register = async (
-    email: string,
-    password: string,
-    name: string,
-    role: UserRole
-  ): Promise<{ success: boolean; error?: string }> => {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Check if user already exists
-    if (mockUsers.find((u) => u.email === email)) {
-      return { success: false, error: "Email already registered" };
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      console.error("Logout error:", error);
+    } finally {
+      setUser(null);
     }
-
-    // Create new user
-    const newUser: User & { password: string } = {
-      id: String(mockUsers.length + 1),
-      email,
-      password,
-      name,
-      role,
-      createdAt: new Date(),
-    };
-
-    mockUsers.push(newUser);
-
-    const { password: _, ...userWithoutPassword } = newUser;
-    setUser(userWithoutPassword);
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(userWithoutPassword));
-    return { success: true };
-  };
-
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
   const value: AuthContextType = {
@@ -136,10 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     isAuthenticated: !!user,
     login,
-    register,
     logout,
-    isOwner: user?.role === "owner" || user?.role === "admin",
-    isGuest: user?.role === "guest",
+    isAdmin: user?.role === "admin",
+    isOwner: user?.role === "admin",
+    isGuest: user?.role === "guest" || user?.role === "user",
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { properties as initialProperties, Property } from "@/lib/mock-data";
+import useSWR, { mutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -52,6 +52,25 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+interface Property {
+  id: string;
+  name: string;
+  type: string;
+  location: string;
+  price_per_night: number;
+  max_guests: number;
+  bedrooms: number;
+  bathrooms: number;
+  amenities: string[];
+  images: string[];
+  description: string;
+  status: string;
+  rating: number;
+  reviews_count: number;
+}
+
 const amenitiesList = [
   "WiFi",
   "Pool",
@@ -73,37 +92,40 @@ const amenitiesList = [
 
 interface PropertyFormData {
   name: string;
-  type: "apartment" | "house" | "villa" | "studio";
+  type: string;
   location: string;
-  pricePerNight: number;
-  maxGuests: number;
+  price_per_night: number;
+  max_guests: number;
   bedrooms: number;
   bathrooms: number;
   amenities: string[];
-  image: string;
+  images: string[];
   description: string;
+  status: string;
 }
 
 const defaultFormData: PropertyFormData = {
   name: "",
   type: "apartment",
   location: "",
-  pricePerNight: 100,
-  maxGuests: 2,
+  price_per_night: 100,
+  max_guests: 2,
   bedrooms: 1,
   bathrooms: 1,
   amenities: [],
-  image: "",
+  images: [],
   description: "",
+  status: "active",
 };
 
 export default function PropertiesPage() {
   const [mounted, setMounted] = useState(false);
-  const [propertyList, setPropertyList] = useState<Property[]>(initialProperties);
+  const { data: propertyList = [], isLoading } = useSWR<Property[]>("/api/properties", fetcher);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState<Property | null>(null);
   const [formData, setFormData] = useState<PropertyFormData>(defaultFormData);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -116,13 +138,14 @@ export default function PropertiesPage() {
         name: property.name,
         type: property.type,
         location: property.location,
-        pricePerNight: property.pricePerNight,
-        maxGuests: property.maxGuests,
+        price_per_night: property.price_per_night,
+        max_guests: property.max_guests,
         bedrooms: property.bedrooms,
         bathrooms: property.bathrooms,
-        amenities: property.amenities,
-        image: property.image,
-        description: "",
+        amenities: property.amenities || [],
+        images: property.images || [],
+        description: property.description || "",
+        status: property.status,
       });
     } else {
       setEditingProperty(null);
@@ -137,30 +160,43 @@ export default function PropertiesPage() {
     setFormData(defaultFormData);
   };
 
-  const handleSubmit = () => {
-    if (editingProperty) {
-      // Update existing property
-      setPropertyList((prev) =>
-        prev.map((p) =>
-          p.id === editingProperty.id
-            ? { ...p, ...formData }
-            : p
-        )
-      );
-    } else {
-      // Add new property
-      const newProperty: Property = {
-        id: `prop-${Date.now()}`,
-        ...formData,
-      };
-      setPropertyList((prev) => [...prev, newProperty]);
+  const handleSubmit = async () => {
+    setIsSaving(true);
+    try {
+      if (editingProperty) {
+        await fetch(`/api/properties/${editingProperty.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData),
+        });
+      } else {
+        await fetch("/api/properties", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...formData,
+            rating: 0,
+            reviews_count: 0,
+          }),
+        });
+      }
+      mutate("/api/properties");
+      handleCloseDialog();
+    } catch (error) {
+      console.error("Error saving property:", error);
+    } finally {
+      setIsSaving(false);
     }
-    handleCloseDialog();
   };
 
-  const handleDelete = (id: string) => {
-    setPropertyList((prev) => prev.filter((p) => p.id !== id));
-    setDeleteConfirmId(null);
+  const handleDelete = async (id: string) => {
+    try {
+      await fetch(`/api/properties/${id}`, { method: "DELETE" });
+      mutate("/api/properties");
+      setDeleteConfirmId(null);
+    } catch (error) {
+      console.error("Error deleting property:", error);
+    }
   };
 
   const toggleAmenity = (amenity: string) => {
@@ -172,7 +208,7 @@ export default function PropertiesPage() {
     }));
   };
 
-  if (!mounted) {
+  if (!mounted || isLoading) {
     return (
       <div className="p-6 lg:p-8">
         <div className="h-96 animate-pulse rounded-lg bg-muted" />
@@ -229,7 +265,7 @@ export default function PropertiesPage() {
                   <Label htmlFor="type">Property Type</Label>
                   <Select
                     value={formData.type}
-                    onValueChange={(value: PropertyFormData["type"]) =>
+                    onValueChange={(value) =>
                       setFormData({ ...formData, type: value })
                     }
                   >
@@ -267,11 +303,11 @@ export default function PropertiesPage() {
                     id="price"
                     type="number"
                     min={0}
-                    value={formData.pricePerNight}
+                    value={formData.price_per_night}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        pricePerNight: Number(e.target.value),
+                        price_per_night: Number(e.target.value),
                       })
                     }
                   />
@@ -282,11 +318,11 @@ export default function PropertiesPage() {
                     id="guests"
                     type="number"
                     min={1}
-                    value={formData.maxGuests}
+                    value={formData.max_guests}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        maxGuests: Number(e.target.value),
+                        max_guests: Number(e.target.value),
                       })
                     }
                   />
@@ -329,9 +365,9 @@ export default function PropertiesPage() {
                 <Input
                   id="image"
                   placeholder="https://example.com/image.jpg"
-                  value={formData.image}
+                  value={formData.images[0] || ""}
                   onChange={(e) =>
-                    setFormData({ ...formData, image: e.target.value })
+                    setFormData({ ...formData, images: [e.target.value] })
                   }
                 />
               </div>
@@ -376,8 +412,8 @@ export default function PropertiesPage() {
               <Button variant="outline" onClick={handleCloseDialog}>
                 Cancel
               </Button>
-              <Button onClick={handleSubmit} disabled={!formData.name || !formData.location}>
-                {editingProperty ? "Save Changes" : "Add Property"}
+              <Button onClick={handleSubmit} disabled={!formData.name || !formData.location || isSaving}>
+                {isSaving ? "Saving..." : editingProperty ? "Save Changes" : "Add Property"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -402,7 +438,7 @@ export default function PropertiesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {propertyList.reduce((sum, p) => sum + p.maxGuests, 0)} guests
+              {propertyList.reduce((sum, p) => sum + p.max_guests, 0)} guests
             </div>
           </CardContent>
         </Card>
@@ -416,7 +452,7 @@ export default function PropertiesPage() {
               $
               {propertyList.length > 0
                 ? Math.round(
-                    propertyList.reduce((sum, p) => sum + p.pricePerNight, 0) /
+                    propertyList.reduce((sum, p) => sum + Number(p.price_per_night), 0) /
                       propertyList.length
                   )
                 : 0}
@@ -463,9 +499,9 @@ export default function PropertiesPage() {
                   <TableRow key={property.id}>
                     <TableCell>
                       <div className="relative h-12 w-16 overflow-hidden rounded">
-                        {property.image ? (
+                        {property.images?.[0] ? (
                           <Image
-                            src={property.image}
+                            src={property.images[0]}
                             alt={property.name}
                             fill
                             className="object-cover"
@@ -493,7 +529,7 @@ export default function PropertiesPage() {
                       <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {property.maxGuests}
+                          {property.max_guests}
                         </span>
                         <span className="flex items-center gap-1">
                           <Bed className="h-3 w-3" />
@@ -506,7 +542,7 @@ export default function PropertiesPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-semibold">
-                      ${property.pricePerNight}
+                      ${property.price_per_night}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
